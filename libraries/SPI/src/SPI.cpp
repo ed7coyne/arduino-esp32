@@ -31,6 +31,7 @@ SPIClass::SPIClass(uint8_t spi_bus)
     ,_ss(-1)
     ,_div(0)
     ,_freq(1000000)
+    ,_inTransaction(false)
 {}
 
 void SPIClass::begin(int8_t sck, int8_t miso, int8_t mosi, int8_t ss)
@@ -48,10 +49,29 @@ void SPIClass::begin(int8_t sck, int8_t miso, int8_t mosi, int8_t ss)
         return;
     }
 
-    _sck = sck;
-    _miso = miso;
-    _mosi = mosi;
-    _ss = ss;
+    if(sck == -1 && miso == -1 && mosi == -1 && ss == -1) {
+#if CONFIG_IDF_TARGET_ESP32S2
+        _sck = (_spi_num == FSPI) ? SCK : -1;
+        _miso = (_spi_num == FSPI) ? MISO : -1;
+        _mosi = (_spi_num == FSPI) ? MOSI : -1;
+        _ss = (_spi_num == FSPI) ? SS : -1;
+#elif CONFIG_IDF_TARGET_ESP32C3
+        _sck = SCK;
+        _miso = MISO;
+        _mosi = MOSI;
+        _ss = SS;
+#else
+        _sck = (_spi_num == VSPI) ? SCK : 14;
+        _miso = (_spi_num == VSPI) ? MISO : 12;
+        _mosi = (_spi_num == VSPI) ? MOSI : 13;
+        _ss = (_spi_num == VSPI) ? SS : 15;
+#endif
+    } else {
+        _sck = sck;
+        _miso = miso;
+        _mosi = mosi;
+        _ss = ss;
+    }
 
     spiAttachSCK(_spi, _sck);
     spiAttachMISO(_spi, _miso);
@@ -77,22 +97,12 @@ void SPIClass::setHwCs(bool use)
     if(use && !_use_hw_ss) {
         spiAttachSS(_spi, 0, _ss);
         spiSSEnable(_spi);
-    } else if(_use_hw_ss) {
+    } else if(!use && _use_hw_ss) {
         spiSSDisable(_spi);
         spiDetachSS(_spi, _ss);
     }
     _use_hw_ss = use;
 }
-
-void SPIClass::beginTransaction(SPISettings settings)
-{
-    spiWaitReady(_spi);
-    setFrequency(settings._clock);
-    setBitOrder(settings._bitOrder);
-    setDataMode(settings._dataMode);
-}
-
-void SPIClass::endTransaction() {}
 
 void SPIClass::setFrequency(uint32_t freq)
 {
@@ -111,6 +121,11 @@ void SPIClass::setClockDivider(uint32_t clockDiv)
     spiSetClockDiv(_spi, _div);
 }
 
+uint32_t SPIClass::getClockDivider()
+{
+    return spiGetClockDiv(_spi);
+}
+
 void SPIClass::setDataMode(uint8_t dataMode)
 {
     spiSetDataMode(_spi, dataMode);
@@ -121,54 +136,113 @@ void SPIClass::setBitOrder(uint8_t bitOrder)
     spiSetBitOrder(_spi, bitOrder);
 }
 
+void SPIClass::beginTransaction(SPISettings settings)
+{
+    //check if last freq changed
+    uint32_t cdiv = spiGetClockDiv(_spi);
+    if(_freq != settings._clock || _div != cdiv) {
+        _freq = settings._clock;
+        _div = spiFrequencyToClockDiv(_freq);
+    }
+    spiTransaction(_spi, _div, settings._dataMode, settings._bitOrder);
+    _inTransaction = true;
+}
+
+void SPIClass::endTransaction()
+{
+    if(_inTransaction){
+        _inTransaction = false;
+        spiEndTransaction(_spi);
+    }
+}
+
 void SPIClass::write(uint8_t data)
 {
+    if(_inTransaction){
+        return spiWriteByteNL(_spi, data);
+    }
     spiWriteByte(_spi, data);
 }
 
 uint8_t SPIClass::transfer(uint8_t data)
 {
-    spiWriteByte(_spi, data);
-    return spiReadByte(_spi);
+    if(_inTransaction){
+        return spiTransferByteNL(_spi, data);
+    }
+    return spiTransferByte(_spi, data);
 }
 
 void SPIClass::write16(uint16_t data)
 {
+    if(_inTransaction){
+        return spiWriteShortNL(_spi, data);
+    }
     spiWriteWord(_spi, data);
 }
 
 uint16_t SPIClass::transfer16(uint16_t data)
 {
-    spiWriteWord(_spi, data);
-    return spiReadWord(_spi);
+    if(_inTransaction){
+        return spiTransferShortNL(_spi, data);
+    }
+    return spiTransferWord(_spi, data);
 }
 
 void SPIClass::write32(uint32_t data)
 {
+    if(_inTransaction){
+        return spiWriteLongNL(_spi, data);
+    }
     spiWriteLong(_spi, data);
 }
 
 uint32_t SPIClass::transfer32(uint32_t data)
 {
-    spiWriteLong(_spi, data);
-    return spiReadLong(_spi);
+    if(_inTransaction){
+        return spiTransferLongNL(_spi, data);
+    }
+    return spiTransferLong(_spi, data);
 }
 
 void SPIClass::transferBits(uint32_t data, uint32_t * out, uint8_t bits)
 {
+    if(_inTransaction){
+        return spiTransferBitsNL(_spi, data, out, bits);
+    }
     spiTransferBits(_spi, data, out, bits);
 }
 
 /**
- * Note:
- *  data need to be aligned to 32Bit
- *  or you get an Fatal exception (9)
  * @param data uint8_t *
  * @param size uint32_t
  */
-void SPIClass::writeBytes(uint8_t * data, uint32_t size)
+void SPIClass::writeBytes(const uint8_t * data, uint32_t size)
 {
-    spiTransferBytes(_spi, data, 0, size);
+    if(_inTransaction){
+        return spiWriteNL(_spi, data, size);
+    }
+    spiSimpleTransaction(_spi);
+    spiWriteNL(_spi, data, size);
+    spiEndTransaction(_spi);
+}
+
+void SPIClass::transfer(uint8_t * data, uint32_t size) 
+{ 
+	transferBytes(data, data, size); 
+}
+
+/**
+ * @param data void *
+ * @param size uint32_t
+ */
+void SPIClass::writePixels(const void * data, uint32_t size)
+{
+    if(_inTransaction){
+        return spiWritePixelsNL(_spi, data, size);
+    }
+    spiSimpleTransaction(_spi);
+    spiWritePixelsNL(_spi, data, size);
+    spiEndTransaction(_spi);
 }
 
 /**
@@ -176,20 +250,20 @@ void SPIClass::writeBytes(uint8_t * data, uint32_t size)
  * @param out  uint8_t * output buffer. can be NULL for Write Only operation
  * @param size uint32_t
  */
-void SPIClass::transferBytes(uint8_t * data, uint8_t * out, uint32_t size)
+void SPIClass::transferBytes(const uint8_t * data, uint8_t * out, uint32_t size)
 {
+    if(_inTransaction){
+        return spiTransferBytesNL(_spi, data, out, size);
+    }
     spiTransferBytes(_spi, data, out, size);
 }
 
 /**
- * Note:
- *  data need to be aligned to 32Bit
- *  or you get an Fatal exception (9)
  * @param data uint8_t *
  * @param size uint8_t  max for size is 64Byte
  * @param repeat uint32_t
  */
-void SPIClass::writePattern(uint8_t * data, uint8_t size, uint32_t repeat)
+void SPIClass::writePattern(const uint8_t * data, uint8_t size, uint32_t repeat)
 {
     if(size > 64) {
         return;    //max Hardware FIFO
@@ -197,11 +271,12 @@ void SPIClass::writePattern(uint8_t * data, uint8_t size, uint32_t repeat)
 
     uint32_t byte = (size * repeat);
     uint8_t r = (64 / size);
+    const uint8_t max_bytes_FIFO = r * size;    // Max number of whole patterns (in bytes) that can fit into the hardware FIFO
 
     while(byte) {
-        if(byte > 64) {
+        if(byte > max_bytes_FIFO) {
             writePattern_(data, size, r);
-            byte -= 64;
+            byte -= max_bytes_FIFO;
         } else {
             writePattern_(data, size, (byte / size));
             byte = 0;
@@ -209,12 +284,12 @@ void SPIClass::writePattern(uint8_t * data, uint8_t size, uint32_t repeat)
     }
 }
 
-void SPIClass::writePattern_(uint8_t * data, uint8_t size, uint8_t repeat)
+void SPIClass::writePattern_(const uint8_t * data, uint8_t size, uint8_t repeat)
 {
     uint8_t bytes = (size * repeat);
     uint8_t buffer[64];
     uint8_t * bufferPtr = &buffer[0];
-    uint8_t * dataPtr;
+    const uint8_t * dataPtr;
     uint8_t dataSize = bytes;
     for(uint8_t i = 0; i < repeat; i++) {
         dataSize = size;
@@ -229,4 +304,9 @@ void SPIClass::writePattern_(uint8_t * data, uint8_t size, uint8_t repeat)
     writeBytes(&buffer[0], bytes);
 }
 
+#if CONFIG_IDF_TARGET_ESP32
 SPIClass SPI(VSPI);
+#else
+SPIClass SPI(FSPI);
+#endif
+

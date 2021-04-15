@@ -26,6 +26,9 @@
 
 #include "WiFiType.h"
 #include "WiFiGeneric.h"
+#ifdef ESP_IDF_VERSION_MAJOR
+#include "esp_event.h"
+#endif
 
 
 class WiFiSTAClass
@@ -43,7 +46,7 @@ public:
     bool config(IPAddress local_ip, IPAddress gateway, IPAddress subnet, IPAddress dns1 = (uint32_t)0x00000000, IPAddress dns2 = (uint32_t)0x00000000);
 
     bool reconnect();
-    bool disconnect(bool wifioff = false);
+    bool disconnect(bool wifioff = false, bool eraseap = false);
 
     bool isConnected();
 
@@ -51,6 +54,7 @@ public:
     bool getAutoConnect();
 
     bool setAutoReconnect(bool autoReconnect);
+    bool getAutoReconnect();
 
     uint8_t waitForConnectResult();
 
@@ -64,20 +68,37 @@ public:
     IPAddress gatewayIP();
     IPAddress dnsIP(uint8_t dns_no = 0);
 
+    IPAddress broadcastIP();
+    IPAddress networkID();
+    uint8_t subnetCIDR();
+    
+    bool enableIpV6();
+    IPv6Address localIPv6();
+
     // STA WiFi info
-    wl_status_t status();
+    static wl_status_t status();
     String SSID() const;
     String psk() const;
 
     uint8_t * BSSID();
     String BSSIDstr();
 
-    int32_t RSSI();
+    int8_t RSSI();
 
     static void _setStatus(wl_status_t status);
+    
 protected:
-    static wl_status_t _status;
     static bool _useStaticIp;
+    static bool _autoReconnect;
+
+public: 
+    bool beginSmartConfig();
+    bool stopSmartConfig();
+    bool smartConfigDone();
+
+    static bool _smartConfigDone;
+protected:
+    static bool _smartConfigStarted;
 
 };
 

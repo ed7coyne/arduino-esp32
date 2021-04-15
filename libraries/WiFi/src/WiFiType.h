@@ -32,7 +32,10 @@
 #define WIFI_AP      WIFI_MODE_AP
 #define WIFI_AP_STA  WIFI_MODE_APSTA
 
-#define WiFiEvent_t  system_event_id_t
+#define WiFiEvent_t  arduino_event_id_t
+#define WiFiEventInfo_t arduino_event_info_t
+#define WiFiEventId_t wifi_event_id_t
+
 
 typedef enum {
     WL_NO_SHIELD        = 255,   // for compatibility with WiFi Shield library

@@ -20,10 +20,6 @@
 #ifndef Arduino_h
 #define Arduino_h
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -33,10 +29,12 @@ extern "C" {
 #include <string.h>
 #include <inttypes.h>
 
+#include "esp_arduino_version.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp32-hal.h"
+#include "esp8266-compat.h"
 #include "soc/gpio_reg.h"
 
 #include "stdlib_noniso.h"
@@ -71,14 +69,7 @@ extern "C" {
 #define __STRINGIFY(a) #a
 #endif
 
-// undefine stdlib's abs if encountered
-#ifdef abs
-#undef abs
-#endif
-
-#define abs(x) ((x)>0?(x):-(x))
 #define constrain(amt,low,high) ((amt)<(low)?(low):((amt)>(high)?(high):(amt)))
-#define round(x)     ((x)>=0?(long)((x)+0.5):(long)((x)-0.5))
 #define radians(deg) ((deg)*DEG_TO_RAD)
 #define degrees(rad) ((rad)*RAD_TO_DEG)
 #define sq(x) ((x)*(x))
@@ -88,7 +79,7 @@ extern "C" {
 #define interrupts() sei()
 #define noInterrupts() cli()
 
-#define clockCyclesPerMicrosecond() ( F_CPU / 1000000L )
+#define clockCyclesPerMicrosecond() ( (long int)getCpuFrequencyMhz() )
 #define clockCyclesToMicroseconds(a) ( (a) / clockCyclesPerMicrosecond() )
 #define microsecondsToClockCycles(a) ( (a) * clockCyclesPerMicrosecond() )
 
@@ -98,14 +89,20 @@ extern "C" {
 #define bitRead(value, bit) (((value) >> (bit)) & 0x01)
 #define bitSet(value, bit) ((value) |= (1UL << (bit)))
 #define bitClear(value, bit) ((value) &= ~(1UL << (bit)))
-#define bitWrite(value, bit, bitvalue) (bitvalue ? bitSet(value, bit) : bitClear(value, bit))
+#define bitWrite(value, bit, bitvalue) ((bitvalue) ? bitSet(value, bit) : bitClear(value, bit))
+
+// avr-libc defines _NOP() since 1.6.2
+#ifndef _NOP
+#define _NOP() do { __asm__ volatile ("nop"); } while (0)
+#endif
 
 #define bit(b) (1UL << (b))
 #define _BV(b) (1UL << (b))
 
 #define digitalPinToPort(pin)       (((pin)>31)?1:0)
-#define digitalPinToBitMask(pin)    (1UL << (pin))
+#define digitalPinToBitMask(pin)    (1UL << (((pin)>31)?((pin)-32):(pin)))
 #define digitalPinToTimer(pin)      (0)
+#define analogInPinToBit(P)         (P)
 #define portOutputRegister(port)    ((volatile uint32_t*)((port)?GPIO_OUT1_REG:GPIO_OUT_REG))
 #define portInputRegister(port)     ((volatile uint32_t*)((port)?GPIO_IN1_REG:GPIO_IN_REG))
 #define portModeRegister(port)      ((volatile uint32_t*)((port)?GPIO_ENABLE1_REG:GPIO_ENABLE_REG))
@@ -120,7 +117,33 @@ typedef uint8_t byte;
 typedef unsigned int word;
 
 #ifdef __cplusplus
+void setup(void);
+void loop(void);
+
+long random(long, long);
+#endif
+void randomSeed(unsigned long);
+long map(long, long, long, long, long);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void init(void);
+void initVariant(void);
+void initArduino(void);
+
+unsigned long pulseIn(uint8_t pin, uint8_t state, unsigned long timeout);
+unsigned long pulseInLong(uint8_t pin, uint8_t state, unsigned long timeout);
+
+uint8_t shiftIn(uint8_t dataPin, uint8_t clockPin, uint8_t bitOrder);
+void shiftOut(uint8_t dataPin, uint8_t clockPin, uint8_t bitOrder, uint8_t val);
+
+#ifdef __cplusplus
 }
+
+#include <algorithm>
+#include <cmath>
 
 #include "WCharacter.h"
 #include "WString.h"
@@ -134,22 +157,33 @@ typedef unsigned int word;
 #include "HardwareSerial.h"
 #include "Esp.h"
 
-#endif /* __cplusplus */
+using std::abs;
+using std::isinf;
+using std::isnan;
+using std::max;
+using std::min;
+using ::round;
 
-#ifndef _GLIBCXX_VECTOR
-// arduino is not compatible with std::vector
-#define min(a,b) ((a)<(b)?(a):(b))
-#define max(a,b) ((a)>(b)?(a):(b))
-#endif
+uint16_t makeWord(uint16_t w);
+uint16_t makeWord(byte h, byte l);
 
-#define _min(a,b) ((a)<(b)?(a):(b))
-#define _max(a,b) ((a)>(b)?(a):(b))
+#define word(...) makeWord(__VA_ARGS__)
+
+unsigned long pulseIn(uint8_t pin, uint8_t state, unsigned long timeout = 1000000L);
+unsigned long pulseInLong(uint8_t pin, uint8_t state, unsigned long timeout = 1000000L);
+
+extern "C" bool getLocalTime(struct tm * info, uint32_t ms = 5000);
+extern "C" void configTime(long gmtOffset_sec, int daylightOffset_sec,
+        const char* server1, const char* server2 = nullptr, const char* server3 = nullptr);
+extern "C" void configTzTime(const char* tz,
+        const char* server1, const char* server2 = nullptr, const char* server3 = nullptr);
 
 // WMath prototypes
 long random(long);
-long random(long, long);
-void randomSeed(unsigned long);
-long map(long, long, long, long, long);
+#endif /* __cplusplus */
+
+#define _min(a,b) ((a)<(b)?(a):(b))
+#define _max(a,b) ((a)>(b)?(a):(b))
 
 #include "pins_arduino.h"
 

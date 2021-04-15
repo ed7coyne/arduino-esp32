@@ -19,11 +19,32 @@
 
 #include "Arduino.h"
 #include "Esp.h"
-#include "rom/spi_flash.h"
+#include "esp_sleep.h"
+#include "esp_spi_flash.h"
 #include <memory>
+#include <soc/soc.h>
+#include <esp_partition.h>
+extern "C" {
+#include "esp_ota_ops.h"
+#include "esp_image_format.h"
+}
+#include <MD5Builder.h>
 
-//#define DEBUG_SERIAL Serial
-
+#include "esp_system.h"
+#ifdef ESP_IDF_VERSION_MAJOR // IDF 4+
+#if CONFIG_IDF_TARGET_ESP32 // ESP32/PICO-D4
+#include "esp32/rom/spi_flash.h"
+#include "soc/efuse_reg.h"
+#elif CONFIG_IDF_TARGET_ESP32S2
+#include "esp32s2/rom/spi_flash.h"
+#elif CONFIG_IDF_TARGET_ESP32C3
+#include "esp32c3/rom/spi_flash.h"
+#else 
+#error Target CONFIG_IDF_TARGET is not supported
+#endif
+#else // ESP32 Before IDF 4.0
+#include "rom/spi_flash.h"
+#endif
 
 /**
  * User-defined Literals
@@ -80,81 +101,231 @@ unsigned long long operator"" _GB(unsigned long long x)
 
 EspClass ESP;
 
-uint32_t EspClass::getCycleCount()
+void EspClass::deepSleep(uint32_t time_us)
 {
-    uint32_t ccount;
-    __asm__ __volatile__("esync; rsr %0,ccount":"=a" (ccount));
-    return ccount;
+    esp_deep_sleep(time_us);
 }
 
 void EspClass::restart(void)
 {
-    system_restart();
+    esp_restart();
+}
+
+uint32_t EspClass::getHeapSize(void)
+{
+    multi_heap_info_t info;
+    heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
+    return info.total_free_bytes + info.total_allocated_bytes;
 }
 
 uint32_t EspClass::getFreeHeap(void)
 {
-    return system_get_free_heap_size();
+    return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+}
+
+uint32_t EspClass::getMinFreeHeap(void)
+{
+    return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+}
+
+uint32_t EspClass::getMaxAllocHeap(void)
+{
+    return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+}
+
+uint32_t EspClass::getPsramSize(void)
+{
+	if(psramFound()){
+	    multi_heap_info_t info;
+	    heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
+	    return info.total_free_bytes + info.total_allocated_bytes;
+	}
+	return 0;
+}
+
+uint32_t EspClass::getFreePsram(void)
+{
+	if(psramFound()){
+	    return heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+	}
+	return 0;
+}
+
+uint32_t EspClass::getMinFreePsram(void)
+{
+	if(psramFound()){
+	    return heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+	}
+	return 0;
+}
+
+uint32_t EspClass::getMaxAllocPsram(void)
+{
+	if(psramFound()){
+	    return heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+	}
+	return 0;
+}
+
+static uint32_t sketchSize(sketchSize_t response) {
+    esp_image_metadata_t data;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (!running) return 0;
+    const esp_partition_pos_t running_pos  = {
+        .offset = running->address,
+        .size = running->size,
+    };
+    data.start_addr = running_pos.offset;
+    esp_image_verify(ESP_IMAGE_VERIFY, &running_pos, &data);
+    if (response) {
+        return running_pos.size - data.image_len;
+    } else {
+        return data.image_len;
+    }
+}
+    
+uint32_t EspClass::getSketchSize () {
+    return sketchSize(SKETCH_SIZE_TOTAL);
+}
+
+String EspClass::getSketchMD5()
+{
+    static String result;
+    if (result.length()) {
+        return result;
+    }
+    uint32_t lengthLeft = getSketchSize();
+
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (!running) {
+        log_e("Partition could not be found");
+
+        return String();
+    }
+    const size_t bufSize = SPI_FLASH_SEC_SIZE;
+    std::unique_ptr<uint8_t[]> buf(new uint8_t[bufSize]);
+    uint32_t offset = 0;
+    if(!buf.get()) {
+        log_e("Not enough memory to allocate buffer");
+
+        return String();
+    }
+    MD5Builder md5;
+    md5.begin();
+    while( lengthLeft > 0) {
+        size_t readBytes = (lengthLeft < bufSize) ? lengthLeft : bufSize;
+        if (!ESP.flashRead(running->address + offset, reinterpret_cast<uint32_t*>(buf.get()), (readBytes + 3) & ~3)) {
+            log_e("Could not read buffer from flash");
+
+            return String();
+        }
+        md5.add(buf.get(), readBytes);
+        lengthLeft -= readBytes;
+        offset += readBytes;
+    }
+    md5.calculate();
+    result = md5.toString();
+    return result;
+}
+
+uint32_t EspClass::getFreeSketchSpace () {
+    const esp_partition_t* _partition = esp_ota_get_next_update_partition(NULL);
+    if(!_partition){
+        return 0;
+    }
+
+    return _partition->size;
+}
+
+uint8_t EspClass::getChipRevision(void)
+{
+    esp_chip_info_t chip_info;
+    esp_chip_info(&chip_info);
+    return chip_info.revision;
+}
+
+const char * EspClass::getChipModel(void)
+{
+#if CONFIG_IDF_TARGET_ESP32
+    uint32_t chip_ver = REG_GET_FIELD(EFUSE_BLK0_RDATA3_REG, EFUSE_RD_CHIP_VER_PKG);
+    uint32_t pkg_ver = chip_ver & 0x7;
+    switch (pkg_ver) {
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ6 :
+            return "ESP32-D0WDQ6";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ5 :
+            return "ESP32-D0WDQ5";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D2WDQ5 :
+            return "ESP32-D2WDQ5";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOD2 :
+            return "ESP32-PICO-D2";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOD4 :
+            return "ESP32-PICO-D4";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOV302 :
+            return "ESP32-PICO-V3-02";
+        default:
+            return "Unknown";
+    }
+#elif CONFIG_IDF_TARGET_ESP32S2
+    return "ESP32-S2";
+#elif CONFIG_IDF_TARGET_ESP32S3
+    return "ESP32-S3";
+#elif CONFIG_IDF_TARGET_ESP32C3
+    return "ESP32-C3";
+#endif
+}
+
+uint8_t EspClass::getChipCores(void)
+{
+    esp_chip_info_t chip_info;
+    esp_chip_info(&chip_info);
+    return chip_info.cores;
 }
 
 const char * EspClass::getSdkVersion(void)
 {
-    return system_get_sdk_version();
+    return esp_get_idf_version();
 }
 
 uint32_t EspClass::getFlashChipSize(void)
 {
-    uint32_t data;
-    uint8_t * bytes = (uint8_t *) &data;
-    // read first 4 byte (magic byte + flash config)
-    if(SPIRead(0x0000, &data, 4) == SPI_FLASH_RESULT_OK) {
-        return magicFlashChipSize((bytes[3] & 0xf0) >> 4);
+    esp_image_header_t fhdr;
+    if(flashRead(0x1000, (uint32_t*)&fhdr, sizeof(esp_image_header_t)) && fhdr.magic != ESP_IMAGE_HEADER_MAGIC) {
+        return 0;
     }
-    return 0;
+    return magicFlashChipSize(fhdr.spi_size);
 }
 
 uint32_t EspClass::getFlashChipSpeed(void)
 {
-    uint32_t data;
-    uint8_t * bytes = (uint8_t *) &data;
-    // read first 4 byte (magic byte + flash config)
-    if(SPIRead(0x0000, &data, 4) == SPI_FLASH_RESULT_OK) {
-        return magicFlashChipSpeed(bytes[3] & 0x0F);
+    esp_image_header_t fhdr;
+    if(flashRead(0x1000, (uint32_t*)&fhdr, sizeof(esp_image_header_t)) && fhdr.magic != ESP_IMAGE_HEADER_MAGIC) {
+        return 0;
     }
-    return 0;
+    return magicFlashChipSpeed(fhdr.spi_speed);
 }
 
 FlashMode_t EspClass::getFlashChipMode(void)
 {
-    FlashMode_t mode = FM_UNKNOWN;
-    uint32_t data;
-    uint8_t * bytes = (uint8_t *) &data;
-    // read first 4 byte (magic byte + flash config)
-    if(SPIRead(0x0000, &data, 4) == SPI_FLASH_RESULT_OK) {
-        mode = magicFlashChipMode(bytes[2]);
+    esp_image_header_t fhdr;
+    if(flashRead(0x1000, (uint32_t*)&fhdr, sizeof(esp_image_header_t)) && fhdr.magic != ESP_IMAGE_HEADER_MAGIC) {
+        return FM_UNKNOWN;
     }
-    return mode;
+    return magicFlashChipMode(fhdr.spi_mode);
 }
 
 uint32_t EspClass::magicFlashChipSize(uint8_t byte)
 {
     switch(byte & 0x0F) {
-    case 0x0: // 4 Mbit (512KB)
-        return (512_kB);
-    case 0x1: // 2 MBit (256KB)
-        return (256_kB);
-    case 0x2: // 8 MBit (1MB)
+    case 0x0: // 8 MBit (1MB)
         return (1_MB);
-    case 0x3: // 16 MBit (2MB)
+    case 0x1: // 16 MBit (2MB)
         return (2_MB);
-    case 0x4: // 32 MBit (4MB)
+    case 0x2: // 32 MBit (4MB)
         return (4_MB);
-    case 0x5: // 64 MBit (8MB)
+    case 0x3: // 64 MBit (8MB)
         return (8_MB);
-    case 0x6: // 128 MBit (16MB)
+    case 0x4: // 128 MBit (16MB)
         return (16_MB);
-    case 0x7: // 256 MBit (32MB)
-        return (32_MB);
     default: // fail?
         return 0;
     }
@@ -179,45 +350,46 @@ uint32_t EspClass::magicFlashChipSpeed(uint8_t byte)
 FlashMode_t EspClass::magicFlashChipMode(uint8_t byte)
 {
     FlashMode_t mode = (FlashMode_t) byte;
-    if(mode > FM_DOUT) {
+    if(mode > FM_SLOW_READ) {
         mode = FM_UNKNOWN;
     }
     return mode;
 }
 
-bool EspClass::eraseConfig(void)
-{
-    bool ret = true;
-    size_t cfgAddr = (getFlashChipSize() - 0x4000);
-    size_t cfgSize = (8*1024);
-
-    while(cfgSize) {
-
-        if(SPIEraseSector((cfgAddr / 4096)) != SPI_FLASH_RESULT_OK) {
-            ret = false;
-        }
-
-        cfgSize -= 4096;
-        cfgAddr += 4096;
-    }
-
-    return ret;
-}
-
 bool EspClass::flashEraseSector(uint32_t sector)
 {
-    int rc = SPIEraseSector(sector);
-    return rc == 0;
+    return spi_flash_erase_sector(sector) == ESP_OK;
 }
 
+// Warning: These functions do not work with encrypted flash
 bool EspClass::flashWrite(uint32_t offset, uint32_t *data, size_t size)
 {
-    int rc = SPIWrite(offset, (uint32_t*) data, size);
-    return rc == 0;
+    return spi_flash_write(offset, (uint32_t*) data, size) == ESP_OK;
 }
 
 bool EspClass::flashRead(uint32_t offset, uint32_t *data, size_t size)
 {
-    int rc = SPIRead(offset, (uint32_t*) data, size);
-    return rc == 0;
+    return spi_flash_read(offset, (uint32_t*) data, size) == ESP_OK;
+}
+
+bool EspClass::partitionEraseRange(const esp_partition_t *partition, uint32_t offset, size_t size) 
+{
+    return esp_partition_erase_range(partition, offset, size) == ESP_OK;
+}
+
+bool EspClass::partitionWrite(const esp_partition_t *partition, uint32_t offset, uint32_t *data, size_t size) 
+{
+    return esp_partition_write(partition, offset, data, size) == ESP_OK;
+}
+
+bool EspClass::partitionRead(const esp_partition_t *partition, uint32_t offset, uint32_t *data, size_t size) 
+{
+    return esp_partition_read(partition, offset, data, size) == ESP_OK;
+}
+
+uint64_t EspClass::getEfuseMac(void)
+{
+    uint64_t _chipmacid = 0LL;
+    esp_efuse_mac_get_default((uint8_t*) (&_chipmacid));
+    return _chipmacid;
 }

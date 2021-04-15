@@ -32,7 +32,7 @@ extern "C" {
 #include <string.h>
 #include <esp_err.h>
 #include <esp_wifi.h>
-#include <esp_event_loop.h>
+#include <esp_event.h>
 }
 
 
@@ -56,9 +56,6 @@ void WiFiClass::printDiag(Print& p)
     wifi_second_chan_t secondChan;
     esp_wifi_get_channel(&primaryChan, &secondChan);
 
-    bool autoConnect;
-    esp_wifi_get_auto_connect(&autoConnect);
-
     p.print("Mode: ");
     p.println(modes[mode]);
 
@@ -71,11 +68,9 @@ void WiFiClass::printDiag(Print& p)
         p.print("Status: ");
         p.println(wifi_station_get_connect_status());
     */
-    p.print("Auto connect: ");
-    p.println(autoConnect);
 
     wifi_config_t conf;
-    esp_wifi_get_config(WIFI_IF_STA, &conf);
+    esp_wifi_get_config((wifi_interface_t)WIFI_IF_STA, &conf);
 
     const char* ssid = reinterpret_cast<const char*>(conf.sta.ssid);
     p.print("SSID (");
@@ -91,6 +86,16 @@ void WiFiClass::printDiag(Print& p)
 
     p.print("BSSID set: ");
     p.println(conf.sta.bssid_set);
+}
+
+void WiFiClass::enableProv(bool status)
+{
+    prov_enable = status;
+}
+
+bool WiFiClass::isProvEnabled()
+{
+    return prov_enable;
 }
 
 WiFiClass WiFi;

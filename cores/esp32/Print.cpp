@@ -29,7 +29,7 @@
 
 #include "Print.h"
 extern "C" {
-//#include "esp_common.h"
+    #include "time.h"
 }
 
 // Public Methods //////////////////////////////////////////////////////////////
@@ -52,35 +52,33 @@ size_t Print::printf(const char *format, ...)
     va_list copy;
     va_start(arg, format);
     va_copy(copy, arg);
-    size_t len = vsnprintf(NULL, 0, format, arg);
+    int len = vsnprintf(temp, sizeof(loc_buf), format, copy);
     va_end(copy);
+    if(len < 0) {
+        va_end(arg);
+        return 0;
+    };
     if(len >= sizeof(loc_buf)){
-        temp = new char[len+1];
+        temp = (char*) malloc(len+1);
         if(temp == NULL) {
+            va_end(arg);
             return 0;
         }
+        len = vsnprintf(temp, len+1, format, arg);
     }
-    len = vsnprintf(temp, len+1, format, arg);
-    write((uint8_t*)temp, len);
     va_end(arg);
-    if(len > 64){
-        delete[] temp;
+    len = write((uint8_t*)temp, len);
+    if(temp != loc_buf){
+        free(temp);
     }
     return len;
 }
-/*
-size_t Print::print(const __FlashStringHelper *ifsh) {
-    PGM_P p = reinterpret_cast<PGM_P>(ifsh);
 
-    size_t n = 0;
-    while (1) {
-        uint8_t c = pgm_read_byte(p++);
-        if (c == 0) break;
-        n += write(c);
-    }
-    return n;
+size_t Print::print(const __FlashStringHelper *ifsh)
+{
+    return print(reinterpret_cast<const char *>(ifsh));
 }
-*/
+
 size_t Print::print(const String &s)
 {
     return write(s.c_str(), s.length());
@@ -113,18 +111,12 @@ size_t Print::print(unsigned int n, int base)
 
 size_t Print::print(long n, int base)
 {
-    if(base == 0) {
-        return write(n);
-    } else if(base == 10) {
-        if(n < 0) {
-            int t = print('-');
-            n = -n;
-            return printNumber(n, 10) + t;
-        }
-        return printNumber(n, 10);
-    } else {
-        return printNumber(n, base);
+    int t = 0;
+    if (base == 10 && n < 0) {
+        t = print('-');
+        n = -n;
     }
+    return printNumber(static_cast<unsigned long>(n), base) + t;
 }
 
 size_t Print::print(unsigned long n, int base)
@@ -136,21 +128,54 @@ size_t Print::print(unsigned long n, int base)
     }
 }
 
+size_t Print::print(long long n, int base)
+{
+    int t = 0;
+    if (base == 10 && n < 0) {
+        t = print('-');
+        n = -n;
+    }
+    return printNumber(static_cast<unsigned long long>(n), base) + t;
+}
+
+size_t Print::print(unsigned long long n, int base)
+{
+    if (base == 0) {
+        return write(n);
+    } else {
+        return printNumber(n, base);
+    }
+}
+
 size_t Print::print(double n, int digits)
 {
     return printFloat(n, digits);
 }
-/*
+
 size_t Print::println(const __FlashStringHelper *ifsh)
 {
     size_t n = print(ifsh);
     n += println();
     return n;
 }
-*/
+
 size_t Print::print(const Printable& x)
 {
     return x.printTo(*this);
+}
+
+size_t Print::print(struct tm * timeinfo, const char * format)
+{
+    const char * f = format;
+    if(!f){
+        f = "%c";
+    }
+    char buf[64];
+    size_t written = strftime(buf, 64, f, timeinfo);
+    if(written == 0){
+        return written;
+    }
+    return print(buf);
 }
 
 size_t Print::println(void)
@@ -214,6 +239,20 @@ size_t Print::println(unsigned long num, int base)
     return n;
 }
 
+size_t Print::println(long long num, int base)
+{
+    size_t n = print(num, base);
+    n += println();
+    return n;
+}
+
+size_t Print::println(unsigned long long num, int base)
+{
+    size_t n = print(num, base);
+    n += println();
+    return n;
+}
+
 size_t Print::println(double num, int digits)
 {
     size_t n = print(num, digits);
@@ -228,11 +267,18 @@ size_t Print::println(const Printable& x)
     return n;
 }
 
+size_t Print::println(struct tm * timeinfo, const char * format)
+{
+    size_t n = print(timeinfo, format);
+    n += println();
+    return n;
+}
+
 // Private Methods /////////////////////////////////////////////////////////////
 
 size_t Print::printNumber(unsigned long n, uint8_t base)
 {
-    char buf[8 * sizeof(long) + 1]; // Assumes 8-bit chars plus zero byte.
+    char buf[8 * sizeof(n) + 1]; // Assumes 8-bit chars plus zero byte.
     char *str = &buf[sizeof(buf) - 1];
 
     *str = '\0';
@@ -243,11 +289,34 @@ size_t Print::printNumber(unsigned long n, uint8_t base)
     }
 
     do {
-        unsigned long m = n;
+        char c = n % base;
+        n /= base;
+
+        *--str = c < 10 ? c + '0' : c + 'A' - 10;
+    } while (n);
+
+    return write(str);
+}
+
+size_t Print::printNumber(unsigned long long n, uint8_t base)
+{
+    char buf[8 * sizeof(n) + 1]; // Assumes 8-bit chars plus zero byte.
+    char* str = &buf[sizeof(buf) - 1];
+
+    *str = '\0';
+
+    // prevent crash if called with base == 1
+    if (base < 2) {
+        base = 10;
+    }
+
+    do {
+        auto m = n;
         n /= base;
         char c = m - base * n;
+
         *--str = c < 10 ? c + '0' : c + 'A' - 10;
-    } while(n);
+    } while (n);
 
     return write(str);
 }

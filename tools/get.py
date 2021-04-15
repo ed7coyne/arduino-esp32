@@ -1,9 +1,16 @@
 #!/usr/bin/env python
-# This script will download and extract required tools into the current directory.
-# Tools list is obtained from package/package_esp8266com_index.template.json file.
-# Written by Ivan Grokhotkov, 2015.
-#
+
+"""Script to download and extract tools
+
+This script will download and extract required tools into the current directory.
+Tools list is obtained from package/package_esp8266com_index.template.json file.
+"""
+
 from __future__ import print_function
+
+__author__ = "Ivan Grokhotkov"
+__version__ = "2015"
+
 import os
 import shutil
 import errno
@@ -15,13 +22,21 @@ import sys
 import tarfile
 import zipfile
 import re
+
 if sys.version_info[0] == 3:
     from urllib.request import urlretrieve
+    from urllib.request import urlopen
+    unicode = lambda s: str(s)
 else:
     # Not Python 3 - today, it is most likely to be Python 2
     from urllib import urlretrieve
+    from urllib import urlopen
 
-dist_dir = 'dist/'
+if 'Windows' in platform.system():
+    import requests
+
+current_dir = os.path.dirname(os.path.realpath(unicode(__file__)))
+dist_dir = current_dir + '/dist/'
 
 def sha256sum(filename, blocksize=65536):
     hash = hashlib.sha256()
@@ -45,11 +60,12 @@ def report_progress(count, blockSize, totalSize):
 
 def unpack(filename, destination):
     dirname = ''
-    print('Extracting {0}'.format(filename))
+    print('Extracting {0} ...'.format(os.path.basename(filename)))
+    sys.stdout.flush()
     if filename.endswith('tar.gz'):
         tfile = tarfile.open(filename, 'r:gz')
         tfile.extractall(destination)
-        dirname= tfile.getnames()[0]
+        dirname = tfile.getnames()[0]
     elif filename.endswith('zip'):
         zfile = zipfile.ZipFile(filename)
         zfile.extractall(destination)
@@ -60,35 +76,61 @@ def unpack(filename, destination):
     # a little trick to rename tool directories so they don't contain version number
     rename_to = re.match(r'^([a-z][^\-]*\-*)+', dirname).group(0).strip('-')
     if rename_to != dirname:
-        print('Renaming {0} to {1}'.format(dirname, rename_to))
+        print('Renaming {0} to {1} ...'.format(dirname, rename_to))
         if os.path.isdir(rename_to):
             shutil.rmtree(rename_to)
         shutil.move(dirname, rename_to)
+
+def download_file(url,filename):
+    import ssl
+    import contextlib
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with contextlib.closing(urlopen(url,context=ctx)) as fp:
+        block_size = 1024 * 8
+        block = fp.read(block_size)
+        if block:
+            with open(filename,'wb') as out_file:
+                out_file.write(block)
+                while True:
+                    block = fp.read(block_size)
+                    if not block:
+                        break
+                    out_file.write(block)
+        else:
+            raise Exception ('nonexisting file or connection error')
 
 def get_tool(tool):
     sys_name = platform.system()
     archive_name = tool['archiveFileName']
     local_path = dist_dir + archive_name
     url = tool['url']
-    #real_hash = tool['checksum'].split(':')[1]
-    if 'CYGWIN_NT' in sys_name:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
     if not os.path.isfile(local_path):
-        print('Downloading ' + archive_name);
-        if 'CYGWIN_NT' in sys_name:
-            urlretrieve(url, local_path, report_progress,context=ctx)
-        else:
-            urlretrieve(url, local_path, report_progress)
-        sys.stdout.write("\rDone\n")
+        print('Downloading ' + archive_name + ' ...')
         sys.stdout.flush()
+        if 'CYGWIN_NT' in sys_name:
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            urlretrieve(url, local_path, report_progress, context=ctx)
+        elif 'Windows' in sys_name:
+            r = requests.get(url)
+            f = open(local_path, 'wb')
+            f.write(r.content)
+            f.close()
+        else:
+            is_ci = os.environ.get('GITHUB_WORKSPACE');
+            if is_ci:
+                download_file(url, local_path)
+            else:
+                urlretrieve(url, local_path, report_progress)
+                sys.stdout.write("\rDone\n")
+                sys.stdout.flush()
     else:
         print('Tool {0} already downloaded'.format(archive_name))
-    #local_hash = sha256sum(local_path)
-    #if local_hash != real_hash:
-    #    print('Hash mismatch for {0}, delete the file and try again'.format(local_path))
-    #    raise RuntimeError()
+        sys.stdout.flush()
     unpack(local_path, '.')
 
 def load_tools_list(filename, platform):
@@ -110,15 +152,19 @@ def identify_platform():
     if sys.maxsize > 2**32:
         bits = 64
     sys_name = platform.system()
-    if 'Linux' in sys_name and platform.platform().find('arm') > 0:
+    sys_platform = platform.platform()
+    if 'Linux' in sys_name and (sys_platform.find('arm') > 0 or sys_platform.find('aarch64') > 0):
         sys_name = 'LinuxARM'
     if 'CYGWIN_NT' in sys_name:
         sys_name = 'Windows'
+    print('System: %s, Bits: %d, Info: %s' % (sys_name, bits, sys_platform))
     return arduino_platform_names[sys_name][bits]
 
 if __name__ == '__main__':
-    print('Platform: {0}'.format(identify_platform()))
-    tools_to_download = load_tools_list('../package/package_esp32_index.template.json', identify_platform())
+    identified_platform = identify_platform()
+    print('Platform: {0}'.format(identified_platform))
+    tools_to_download = load_tools_list(current_dir + '/../package/package_esp32_index.template.json', identified_platform)
     mkdir_p(dist_dir)
     for tool in tools_to_download:
         get_tool(tool)
+    print('Platform Tools Installed')

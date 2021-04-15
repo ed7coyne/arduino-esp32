@@ -1,38 +1,51 @@
-Arduino core for ESP32 WiFi chip
-===========================================
+# Arduino core for the ESP32
+[![Build Status](https://travis-ci.org/espressif/arduino-esp32.svg?branch=master)](https://travis-ci.org/espressif/arduino-esp32) ![](https://github.com/espressif/arduino-esp32/workflows/ESP32%20Arduino%20CI/badge.svg)
+
+### Need help or have a question? Join the chat at [![https://gitter.im/espressif/arduino-esp32](https://badges.gitter.im/espressif/arduino-esp32.svg)](https://gitter.im/espressif/arduino-esp32?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
+## Contents
+- [Development Status](#development-status)
+- [Installation Instructions](#installation-instructions)
+- [Decoding Exceptions](#decoding-exceptions)
+- [Issue/Bug report template](#issuebug-report-template)
+- [ESP32Dev Board PINMAP](#esp32dev-board-pinmap)
 
 ### Development Status
-Not everything is working yet, you can not get it through package manager, but you can give it a go and help us find bugs in the things that are implemented :)
 
-The framework can also be downloaded as component in an IDF project and be used like that.
+Latest Stable Release  [![Release Version](https://img.shields.io/github/release/espressif/arduino-esp32.svg?style=plastic)](https://github.com/espressif/arduino-esp32/releases/latest/) [![Release Date](https://img.shields.io/github/release-date/espressif/arduino-esp32.svg?style=plastic)](https://github.com/espressif/arduino-esp32/releases/latest/) [![Downloads](https://img.shields.io/github/downloads/espressif/arduino-esp32/latest/total.svg?style=plastic)](https://github.com/espressif/arduino-esp32/releases/latest/)
 
-Things that "should" work:
-- pinMode
-- digitalRead/digitalWrite
-- attachInterrupt/detachInterrupt
-- Serial (global Serial is attached to pins 1 and 3 by default, there are another 2 serials that you can attach to any pin)
-- SPI (global SPI is attached to VSPI pins by default and HSPI can be attached to any pins)
-- Wire (global Wire is attached to pins 21 and 22 by default and there is another I2C bus that you can attach to any pins)
-- WiFi (about 99% the same as ESP8266)
+Latest Development Release  [![Release Version](https://img.shields.io/github/release/espressif/arduino-esp32/all.svg?style=plastic)](https://github.com/espressif/arduino-esp32/releases/latest/) [![Release Date](https://img.shields.io/github/release-date-pre/espressif/arduino-esp32.svg?style=plastic)](https://github.com/espressif/arduino-esp32/releases/latest/) [![Downloads](https://img.shields.io/github/downloads-pre/espressif/arduino-esp32/latest/total.svg?style=plastic)](https://github.com/espressif/arduino-esp32/releases/latest/)
 
-WiFiClient, WiFiServer and WiFiUdp are not quite ready yet because there are still some small hiccups in LwIP to be overcome.
-You can try WiFiClient but you need to disconnect the client yourself to be sure that connection is closed.
 
-### Installation
-- Install Arduino IDE
-- Go to Arduino IDE installation directory
-- Clone this repository into hardware/espressif/esp32 directory (or clone it elsewhere and create a symlink)
-```bash
-cd hardware
-mkdir espressif
-cd espressif
-git clone https://github.com/espressif/arduino-esp32.git esp32
-```
-- Download binary tools (you need Python 2.7)
-```bash
-cd esp32/tools
-python get.py
-```
-- Restart Arduino
+### Installation Instructions
+- Using Arduino IDE Boards Manager (preferred)
+  + [Instructions for Boards Manager](docs/arduino-ide/boards_manager.md)
+- Using Arduino IDE with the development repository
+  + [Instructions for Windows](docs/arduino-ide/windows.md)
+  + [Instructions for Mac](docs/arduino-ide/mac.md)
+  + [Instructions for Debian/Ubuntu Linux](docs/arduino-ide/debian_ubuntu.md)
+  + [Instructions for Fedora](docs/arduino-ide/fedora.md)
+  + [Instructions for openSUSE](docs/arduino-ide/opensuse.md)
+- [Using PlatformIO](docs/platformio.md)
+- [Building with make](docs/make.md)
+- [Using as ESP-IDF component](docs/esp-idf_component.md)
+- [Using OTAWebUpdater](docs/OTAWebUpdate/OTAWebUpdate.md)
 
-![Pin Functions](doc/esp32_pinmap.png)
+### Decoding exceptions
+
+You can use [EspExceptionDecoder](https://github.com/me-no-dev/EspExceptionDecoder) to get meaningful call trace.
+
+### Issue/Bug report template
+Before reporting an issue, make sure you've searched for similar one that was already created. Also make sure to go through all the issues labelled as [for reference](https://github.com/espressif/arduino-esp32/issues?utf8=%E2%9C%93&q=is%3Aissue%20label%3A%22for%20reference%22%20).
+
+Finally, if you are sure no one else had the issue, follow the [ISSUE_TEMPLATE](docs/ISSUE_TEMPLATE.md) while reporting any issue.
+
+### ESP32Dev Board PINMAP
+
+![Pin Functions](docs/esp32_pinmap.png)
+
+![ESP32S2_Pinmap](docs/esp32s2_pinmap.png)
+
+### Tip
+
+Sometimes to program ESP32 via serial you must keep GPIO0 LOW during the programming process
